@@ -6,9 +6,9 @@ from PIL import Image
 
 # Load the pre-trained model
 net = cv2.dnn.readNetFromCaffe(
-    "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/voc/MobileNetSSD_deploy.prototxt",
-    "https://github.com/chuanqi305/MobileNet-SSD/raw/master/voc/MobileNetSSD_deploy.caffemodel"
-)
+    "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/voc/MobileNetSSD_deploy.prototxt", # architecture of the NN defining layers, types of layers, connections btw layers, and other params needed to construct the network. Blueprint of the model.
+    "https://github.com/chuanqi305/MobileNet-SSD/raw/master/voc/MobileNetSSD_deploy.caffemodel" # pre-trained weights of the model, resulting from training network on the dataset, weights needed to make predictions
+) # try local file paths
 
 CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
            "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
