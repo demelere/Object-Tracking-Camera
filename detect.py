@@ -1,79 +1,96 @@
 import cv2
 import numpy as np
-from imutils.video import VideoStream
-import time
+import subprocess
+import io
+from PIL import Image
 
-# Load COCO class labels
-with open('models/coco.names', 'r') as f:
-    CLASSES = f.read().splitlines()
+# Load the pre-trained model
+net = cv2.dnn.readNetFromCaffe(
+    "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/voc/MobileNetSSD_deploy.prototxt",
+    "https://github.com/chuanqi305/MobileNet-SSD/raw/master/voc/MobileNetSSD_deploy.caffemodel"
+)
 
-# Load the neural network
-net = cv2.dnn.readNet('Models/yolov4-tiny.weights', 'Models/yolov4-tiny.cfg')
+CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
+           "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+           "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
+           "sofa", "train", "tvmonitor"]
 
-# Initialize video stream
-vs = VideoStream(src=0).start()
-time.sleep(2.0)  # Warm up camera
+# Start libcamera process
+cmd = [
+    'libcamera-vid',
+    '-t', '0',                # Run indefinitely
+    '-n',                     # Don't save to file
+    '--width', '640',         # Adjust resolution as needed
+    '--height', '480',
+    '--framerate', '30',
+    '--codec', 'mjpeg',       # Use MJPEG
+    '-o', '-'                 # Output to stdout
+]
 
-while True:
-    # Grab frame
-    frame = vs.read()
+process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+
+try:
+    # Buffer for the image data
+    buffer = io.BytesIO()
     
-    # Create blob from image
-    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
-    net.setInput(blob)
-    
-    # Get output layer names
-    layer_names = net.getLayerNames()
-    output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
-    
-    # Forward pass
-    outputs = net.forward(output_layers)
-    
-    # Initialize lists for detected objects
-    boxes = []
-    confidences = []
-    class_ids = []
-    
-    # Process detections
-    for output in outputs:
-        for detection in output:
-            scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
+    while True:
+        # Read JPEG header (FF D8)
+        while process.stdout.read(1) != b'\xff' or process.stdout.read(1) != b'\xd8':
+            continue
             
-            if confidence > 0.5:  # Confidence threshold
-                # Object detected
-                center_x = int(detection[0] * frame.shape[1])
-                center_y = int(detection[1] * frame.shape[0])
-                w = int(detection[2] * frame.shape[1])
-                h = int(detection[3] * frame.shape[0])
+        buffer.write(b'\xff\xd8')
+        
+        # Read until JPEG end (FF D9)
+        while True:
+            byte = process.stdout.read(1)
+            buffer.write(byte)
+            if byte == b'\xff' and process.stdout.read(1) == b'\xd9':
+                buffer.write(b'\xd9')
+                break
+        
+        # Convert to OpenCV format
+        buffer.seek(0)
+        image = Image.open(buffer)
+        frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Create blob from image
+        blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5)
+        
+        # Pass blob through network
+        net.setInput(blob)
+        detections = net.forward()
+        
+        # Get frame dimensions
+        (h, w) = frame.shape[:2]
+        
+        # Loop over detections
+        for i in range(0, detections.shape[2]):
+            confidence = detections[0, 0, i, 2]
+            
+            if confidence > 0.5:
+                class_id = int(detections[0, 0, i, 1])
                 
-                # Rectangle coordinates
-                x = int(center_x - w/2)
-                y = int(center_y - h/2)
+                # Compute bounding box
+                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                (startX, startY, endX, endY) = box.astype("int")
                 
-                boxes.append([x, y, w, h])
-                confidences.append(float(confidence))
-                class_ids.append(class_id)
-    
-    # Apply non-maxima suppression
-    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
-    
-    # Draw boxes
-    for i in range(len(boxes)):
-        if i in indexes:
-            x, y, w, h = boxes[i]
-            label = str(CLASSES[class_ids[i]])
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x, y - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    
-    # Show frame
-    cv2.imshow("Frame", frame)
-    
-    # Break loop on 'q' press
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+                # Draw prediction
+                label = f"{CLASSES[class_id]}: {confidence * 100:.2f}%"
+                cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
+                cv2.putText(frame, label, (startX, startY - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        # Show frame
+        cv2.imshow("Frame", frame)
+        
+        # Clear buffer for next frame
+        buffer.seek(0)
+        buffer.truncate()
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-vs.stop()
-cv2.destroyAllWindows()
+finally:
+    # Clean up
+    process.terminate()
+    cv2.destroyAllWindows()
